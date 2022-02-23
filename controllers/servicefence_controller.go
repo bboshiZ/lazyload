@@ -20,13 +20,14 @@ import (
 	"context"
 	"fmt"
 	"reflect"
-	"slime.io/slime/framework/apis/config/v1alpha1"
-	"slime.io/slime/framework/model"
-	"slime.io/slime/framework/model/metric"
 	"sort"
 	"strings"
 	"sync"
 	"time"
+
+	"slime.io/slime/framework/apis/config/v1alpha1"
+	"slime.io/slime/framework/model"
+	"slime.io/slime/framework/model/metric"
 
 	istio "istio.io/api/networking/v1alpha3"
 	corev1 "k8s.io/api/core/v1"
@@ -92,7 +93,8 @@ func NewReconciler(cfg *v1alpha1.Fence, mgr manager.Manager, env bootstrap.Envir
 	}
 
 	// start service related cache
-	r.nsSvcCache, r.labelSvcCache, err = newSvcCache(env.K8SClient)
+	// r.nsSvcCache, r.labelSvcCache, err = newSvcCache(env.K8SClient)
+	r.nsSvcCache, r.labelSvcCache, err = newSvcCacheMultiK8s(env.K8SRemoteClients)
 	if err != nil {
 		log.Errorf("init LabelSvcCache err: %v", err)
 		return nil

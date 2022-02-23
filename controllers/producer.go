@@ -3,6 +3,11 @@ package controllers
 import (
 	"context"
 	stderrors "errors"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+
 	envoy_config_core "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	data_accesslog "github.com/envoyproxy/go-control-plane/envoy/data/accesslog/v3"
 	prometheusApi "github.com/prometheus/client_golang/api"
@@ -19,10 +24,6 @@ import (
 	"slime.io/slime/framework/model/metric"
 	"slime.io/slime/framework/model/trigger"
 	"slime.io/slime/framework/util"
-	"strconv"
-	"strings"
-	"sync"
-	"time"
 )
 
 const (
@@ -130,7 +131,9 @@ func newProducerConfig(env bootstrap.Environment) (*metric.ProducerConfig, error
 		// init log source port
 		port := env.Config.Global.Misc["logSourcePort"]
 
-		ipToSvcCache, cacheLock, err := newIpToSvcCache(env.K8SClient)
+		// ipToSvcCache, cacheLock, err := newIpToSvcCache(env.K8SClient)
+		ipToSvcCache, cacheLock, err := newIpToSvcCacheMultiK8s(env.K8SRemoteClients)
+
 		if err != nil {
 			return nil, err
 		}
@@ -413,6 +416,113 @@ func newIpToSvcCache(clientSet *kubernetes.Clientset) (map[string]string, *sync.
 
 		}
 	}()
+
+	return ipToSvcCache, &cacheLock, nil
+}
+
+func newIpToSvcCacheMultiK8s(clientSets []*kubernetes.Clientset) (map[string]string, *sync.RWMutex, error) {
+	log := log.WithField("reporter", "AccessLogConvertor").WithField("function", "generateSvcToIpsCache")
+	ipToSvcCache := make(map[string]string)
+	svcToIpsCache := make(map[string][]string)
+	var cacheLock sync.RWMutex
+
+	// clientSets, _ := getRemoteK8s(client)
+	for i := range clientSets {
+		// init svcToIps
+		clientSet := clientSets[i]
+		eps, err := clientSet.CoreV1().Endpoints("").List(metav1.ListOptions{})
+		if err != nil {
+			return nil, nil, stderrors.New("failed to get endpoints list")
+		}
+
+		for _, ep := range eps.Items {
+			svc := ep.GetNamespace() + "/" + ep.GetName()
+			var addresses []string
+			for _, subset := range ep.Subsets {
+				for _, address := range subset.Addresses {
+					addresses = append(addresses, address.IP)
+					ipToSvcCache[address.IP] = svc
+				}
+			}
+			cacheLock.Lock()
+			svcToIpsCache[svc] = addresses
+			cacheLock.Unlock()
+		}
+
+		// init endpoint watcher
+		epsClient := clientSet.CoreV1().Endpoints("")
+		lw := &cache.ListWatch{
+			ListFunc: func(options metav1.ListOptions) (runtime.Object, error) {
+				return epsClient.List(options)
+			},
+			WatchFunc: func(options metav1.ListOptions) (watch.Interface, error) {
+				return epsClient.Watch(options)
+			},
+		}
+		watcher := util.ListWatcher(context.Background(), lw)
+
+		go func() {
+			log.Infof("Endpoint cacher is running")
+			for {
+				e, ok := <-watcher.ResultChan()
+				if !ok {
+					log.Warningf("a result chan of endpoint watcher is closed, break process loop")
+					return
+				}
+
+				ep, ok := e.Object.(*v1.Endpoints)
+				if !ok {
+					log.Errorf("invalid type of object in endpoint watcher event")
+					continue
+				}
+
+				svc := ep.GetNamespace() + "/" + ep.GetName()
+				// delete event
+				if e.Type == watch.Deleted {
+					cacheLock.Lock()
+					for _, ip := range svcToIpsCache[svc] {
+						delete(ipToSvcCache, ip)
+					}
+					delete(svcToIpsCache, svc)
+					cacheLock.Unlock()
+					continue
+				}
+
+				// add, update event
+
+				var subSets []v1.EndpointSubset
+				for i := range clientSets {
+					ep, err := clientSets[i].CoreV1().Endpoints(ep.GetNamespace()).Get(ep.GetName(), metav1.GetOptions{})
+					if err != nil {
+						continue
+					}
+					subSets = append(subSets, ep.Subsets...)
+				}
+
+				// ep, err := clientSet.CoreV1().Endpoints(ep.GetNamespace()).Get(ep.GetName(), metav1.GetOptions{})
+				// if err != nil {
+				// 	continue
+				// }
+				// delete previous key, value
+				cacheLock.Lock()
+				for _, ip := range svcToIpsCache[svc] {
+					delete(ipToSvcCache, ip)
+				}
+				// add new key, value
+				var addresses []string
+				for _, subset := range subSets {
+					// for _, subset := range ep.Subsets {
+					for _, address := range subset.Addresses {
+						addresses = append(addresses, address.IP)
+						ipToSvcCache[address.IP] = svc
+					}
+				}
+				svcToIpsCache[svc] = addresses
+				cacheLock.Unlock()
+
+			}
+		}()
+	}
 
 	return ipToSvcCache, &cacheLock, nil
 }
