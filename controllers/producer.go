@@ -3,7 +3,6 @@ package controllers
 import (
 	"context"
 	stderrors "errors"
-	"fmt"
 	"strconv"
 	"strings"
 	"sync"
@@ -229,20 +228,16 @@ func accessLogHandler(logEntry []*data_accesslog.HTTPAccessLogEntry, ipToSvcCach
 
 		// fetch sourceSvcMeta
 		sourceSvc, err := spliceSourceSvc(sourceIp, ipToSvcCache, cacheLock)
-		fmt.Printf("xxx-spliceSourceSvc:%+v,,%+v\n", sourceSvc, err)
 		if err != nil {
-			fmt.Printf("xxx-spliceSourceSvc--err:%+v\n", ipToSvcCache)
 			return nil, err
 		}
 		if sourceSvc == "" {
-			fmt.Printf("xxx-spliceSourceSvc--sourceSvc is null\n")
 			continue
 		}
 
 		// fetch destinationSvcMeta
 		destinationSvc := spliceDestinationSvc(entry, sourceSvc)
 		if destinationSvc == "" {
-			fmt.Printf("xxx-spliceSourceSvc--destinationSvc is null\n")
 			continue
 		}
 
