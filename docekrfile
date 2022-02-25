@@ -1,0 +1,2 @@
+FROM docker.io/slimeio/slime-lazyload:v0.2.0-1b93bf7
+COPY manager /manager
