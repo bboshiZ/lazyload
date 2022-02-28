@@ -319,16 +319,21 @@ func (r *ServicefenceReconciler) updateVisitedHostStatus(sf *lazyloadv1alpha1.Se
 	}
 	for k, dest := range sf.Status.Domains {
 		if _, ok := domains[k]; !ok {
-			if dest.Status == lazyloadv1alpha1.Destinations_ACTIVE {
-				// active -> pending
-				domains[k] = &lazyloadv1alpha1.Destinations{
-					Hosts:  dest.Hosts,
-					Status: lazyloadv1alpha1.Destinations_EXPIREWAIT,
-				}
-			} else {
-				// pending -> delete
-				delta.Deleted = append(delta.Deleted, k)
+			domains[k] = &lazyloadv1alpha1.Destinations{
+				Hosts:  dest.Hosts,
+				Status: lazyloadv1alpha1.Destinations_ACTIVE,
 			}
+
+			// if dest.Status == lazyloadv1alpha1.Destinations_ACTIVE {
+			// 	// active -> pending
+			// 	domains[k] = &lazyloadv1alpha1.Destinations{
+			// 		Hosts:  dest.Hosts,
+			// 		Status: lazyloadv1alpha1.Destinations_EXPIREWAIT,
+			// 	}
+			// } else {
+			// 	// pending -> delete
+			// 	delta.Deleted = append(delta.Deleted, k)
+			// }
 		}
 	}
 	for k := range domains {
