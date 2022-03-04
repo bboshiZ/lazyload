@@ -34,6 +34,8 @@ import (
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/kubernetes"
+	queue "k8s.io/client-go/util/workqueue"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -53,6 +55,8 @@ import (
 // ServicefenceReconciler reconciles a Servicefence object
 type ServicefenceReconciler struct {
 	client.Client
+	RemoteClients        []*kubernetes.Clientset
+	ServiceController    *ServiceController
 	Scheme               *runtime.Scheme
 	cfg                  *v1alpha1.Fence
 	env                  bootstrap.Environment
@@ -68,6 +72,12 @@ type ServicefenceReconciler struct {
 	defaultAddNamespaces []string
 }
 
+func ttt(req ctrl.Request) (ctrl.Result, error) {
+
+	fmt.Println("xxxx:", req)
+	return ctrl.Result{}, nil
+}
+
 // NewReconciler returns a new reconcile.Reconciler
 func NewReconciler(cfg *v1alpha1.Fence, mgr manager.Manager, env bootstrap.Environment) *ServicefenceReconciler {
 	log := modmodel.ModuleLog.WithField(model.LogFieldKeyFunction, "NewReconciler")
@@ -81,6 +91,7 @@ func NewReconciler(cfg *v1alpha1.Fence, mgr manager.Manager, env bootstrap.Envir
 
 	r := &ServicefenceReconciler{
 		Client:               mgr.GetClient(),
+		RemoteClients:        env.K8SRemoteClients,
 		Scheme:               mgr.GetScheme(),
 		env:                  env,
 		interestMeta:         map[string]bool{},
@@ -92,9 +103,15 @@ func NewReconciler(cfg *v1alpha1.Fence, mgr manager.Manager, env bootstrap.Envir
 		defaultAddNamespaces: []string{env.Config.Global.IstioNamespace, env.Config.Global.SlimeNamespace},
 	}
 
+	r.ServiceController = &ServiceController{
+		queue:       queue.NewNamedRateLimitingQueue(queue.DefaultControllerRateLimiter(), "service"),
+		syncService: reconcile.Func(r.ReconcileService),
+		// syncService: ttt,
+	}
+
 	// start service related cache
 	// r.nsSvcCache, r.labelSvcCache, err = newSvcCache(env.K8SClient)
-	r.nsSvcCache, r.labelSvcCache, err = newSvcCacheMultiK8s(env.K8SRemoteClients)
+	r.nsSvcCache, r.labelSvcCache, err = newSvcCacheMultiK8s(env.K8SRemoteClients, r.ServiceController)
 	if err != nil {
 		log.Errorf("init LabelSvcCache err: %v", err)
 		return nil
@@ -113,6 +130,9 @@ func NewReconciler(cfg *v1alpha1.Fence, mgr manager.Manager, env bootstrap.Envir
 	} else {
 		log.Warningf("watching metric is not running")
 	}
+
+	// var ctx context.Context
+	// go serviceController.Run(2, ctx.Done())
 
 	return r
 }

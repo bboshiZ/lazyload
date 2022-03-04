@@ -284,7 +284,7 @@ func getRemoteK8s(clientSet *kubernetes.Clientset) ([]*kubernetes.Clientset, err
 
 	}
 
-	log.Errorf("Error getRemoteK8s: %v", secrets)
+	// log.Errorf("Error getRemoteK8s: %v", secrets)
 	for _, secret := range secrets.Items {
 		clusterName, ok := secret.Annotations["networking.istio.io/cluster"]
 		if !ok {

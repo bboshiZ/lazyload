@@ -1,11 +1,13 @@
 package module
 
 import (
+	"context"
+	"os"
+
 	"github.com/golang/protobuf/proto"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
-	"os"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	istioapi "slime.io/slime/framework/apis"
@@ -76,6 +78,10 @@ func (mo *Module) InitManager(mgr manager.Manager, env bootstrap.Environment, cb
 		log.Errorf("unable to create controller,%+v", err)
 		os.Exit(1)
 	}
+
+	ctx := context.Background()
+	// stopCh := make(chan struct{})
+	go sfReconciler.ServiceController.Run(1, ctx.Done())
 
 	return nil
 }

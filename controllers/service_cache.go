@@ -7,9 +7,11 @@ import (
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/cache"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"slime.io/slime/framework/util"
 )
 
@@ -122,7 +124,7 @@ func newSvcCache(clientSet *kubernetes.Clientset) (*NsSvcCache, *LabelSvcCache, 
 
 }
 
-func newSvcCacheMultiK8s(clientSets []*kubernetes.Clientset) (*NsSvcCache, *LabelSvcCache, error) {
+func newSvcCacheMultiK8s(clientSets []*kubernetes.Clientset, sc *ServiceController) (*NsSvcCache, *LabelSvcCache, error) {
 	log := log.WithField("function", "newLabelSvcCache")
 	nsSvcCache := &NsSvcCache{Data: map[string]map[string]struct{}{}}
 	labelSvcCache := &LabelSvcCache{Data: map[LabelItem]map[string]struct{}{}}
@@ -138,6 +140,11 @@ func newSvcCacheMultiK8s(clientSets []*kubernetes.Clientset) (*NsSvcCache, *Labe
 		for _, service := range services.Items {
 			ns := service.GetNamespace()
 			name := service.GetName()
+			// r := &ctrl.Request{types.NamespacedName{Namespace: ns, Name: name}}
+			// r.Namespace = ns
+			// r.Name = name
+			// r.Namespace
+			// sc.add(ctrl.Request{types.NamespacedName{Namespace: ns, Name: name}})
 			svc := ns + "/" + name
 			if nsSvcCache.Data[ns] == nil {
 				nsSvcCache.Data[ns] = make(map[string]struct{})
@@ -188,6 +195,8 @@ func newSvcCacheMultiK8s(clientSets []*kubernetes.Clientset) (*NsSvcCache, *Labe
 				ns := service.GetNamespace()
 				name := service.GetName()
 				eventSvc := ns + "/" + name
+				sc.add(ctrl.Request{types.NamespacedName{Namespace: ns, Name: name}})
+
 				// delete eventSvc from labelSvcCache to ensure final consistency
 				labelSvcCache.Lock()
 				for label, m := range labelSvcCache.Data {
