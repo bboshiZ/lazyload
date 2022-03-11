@@ -189,7 +189,12 @@ func (r *ServicefenceReconciler) ReconcileNamespace(req ctrl.Request) (ret ctrl.
 	}
 
 	nsFenced := nsLabel == ServiceFencedTrue
-	if nsFenced == r.enabledNamespaces[req.Name] {
+	if req.NamespacedName.Namespace == "sample" {
+		log.Errorf("ReconcileNamespace-aaa nsFenced, %+v", nsFenced)
+		log.Errorf("ReconcileNamespace-bbb  r.enabledNamespaces, %+v", r.enabledNamespaces)
+	}
+
+	if nsFenced && r.enabledNamespaces[req.Name] {
 		return reconcile.Result{}, nil
 	} else {
 		prev := r.enabledNamespaces[req.Name]
@@ -202,19 +207,53 @@ func (r *ServicefenceReconciler) ReconcileNamespace(req ctrl.Request) (ret ctrl.
 		}()
 	}
 
+	if req.NamespacedName.Namespace == "sample" {
+		log.Errorf("ReconcileNamespace-xxx nsFenced, %+v", nsFenced)
+	}
+
 	if !nsFenced {
 		sfList := &lazyloadv1alpha1.ServiceFenceList{}
-		err := r.Client.List(ctx, sfList, &ctrlClient.ListOptions{Namespace: req.Namespace})
-		if err != nil {
-			log.Errorf("get ServiceFenceList error, %+v", err)
-			return reconcile.Result{}, err
-		}
+		// log.Errorf("ReconcileNamespace-xxx DeleteAllOf-list,%+v", sfList.Items)
 
-		err = r.Client.DeleteAllOf(ctx, sfList)
+		err := r.Client.List(ctx, sfList, &ctrlClient.ListOptions{Namespace: req.Namespace})
+		// log.Errorf("ReconcileNamespace-xxxaa DeleteAllOf, %+v,%+v", sfList, err)
 		if err != nil {
 			log.Errorf("get ServiceFenceList error, %+v", err)
 			return reconcile.Result{}, err
 		}
+		for _, item := range sfList.Items {
+			sf := &lazyloadv1alpha1.ServiceFence{
+				TypeMeta: metav1.TypeMeta{},
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      item.Name,
+					Namespace: item.Namespace,
+				},
+				Spec: lazyloadv1alpha1.ServiceFenceSpec{
+					Enable: true,
+					WorkloadSelector: &lazyloadv1alpha1.WorkloadSelector{
+						FromService: true,
+					},
+				},
+			}
+			// log.Errorf("ReconcileNamespace-xxxaa Delete, %+v", sf)
+			log.Errorf("delete fence-xxx %s", sf)
+			if err := r.Client.Delete(ctx, sf); err != nil {
+				log.Errorf("delete fence %s failed, %+v", sf, err)
+			}
+		}
+		// if len(sfList.Items) > 0 {
+		// 	if err := r.Client.Delete(ctx, sf); err != nil {
+		// 		log.Errorf("delete fence %s failed, %+v", nsName, err)
+		// 	}
+		// }
+		// err = r.Client.DeleteAllOf(ctx, sfList)
+		// if err != nil {
+		// 	log.Errorf("get ServiceFenceList error, %+v", err)
+		// 	return reconcile.Result{}, err
+		// }
+
+		// log.Errorf("ReconcileNamespace-xxx DeleteAllOf, %+v", sfList)
+
 		// if err != nil {
 		// 	if errors.IsNotFound(err) {
 		// 		sf = nil
@@ -224,8 +263,12 @@ func (r *ServicefenceReconciler) ReconcileNamespace(req ctrl.Request) (ret ctrl.
 		// 	}
 		// }
 	} else {
+		// log.Errorf("ReconcileNamespace-xxx add sf, %+v", req.Name)
+
 		for _, rClient := range r.RemoteClients {
 			services, err := rClient.CoreV1().Services(req.Name).List(metav1.ListOptions{})
+			// log.Errorf("ReconcileNamespace-xxx add services, %+v,%+v", services, err)
+
 			if err != nil {
 				log.Errorf("list services %s failed, %+v", req.Name, err)
 				continue
@@ -233,11 +276,15 @@ func (r *ServicefenceReconciler) ReconcileNamespace(req ctrl.Request) (ret ctrl.
 			}
 
 			for _, svc := range services.Items {
+				// log.Errorf("ReconcileNamespace-xxx services.Items-begin, %+v", svc)
+
 				if ret, err = r.refreshFenceStatusOfService(ctx, &svc, types.NamespacedName{}); err != nil {
 					log.Errorf("refreshFenceStatusOfService services %s failed, %+v", svc.Name, err)
 					continue
 					// return ret, err
 				}
+				// log.Errorf("ReconcileNamespace-xxx services.Items-done %+v", svc)
+
 			}
 		}
 
@@ -337,6 +384,16 @@ func (r *ServicefenceReconciler) refreshFenceStatusOfService(ctx context.Context
 		}
 	}
 
+	// if nsName.Name == "sleep" {
+	// 	log.Errorf("check-xxxx ,sf:%+v", sf)
+	// 	log.Errorf("check-xxxx ,svc:%+v", svc)
+	// 	if svc != nil {
+	// 		log.Errorf("check-xxxx ,isServiceFenced:%+v", r.isServiceFenced(ctx, svc))
+	// 	}
+	// }
+
+	// isFenceCreatedByController(sf) && (svc == nil || !r.isServiceFenced(ctx, svc))
+
 	if sf == nil {
 		// log.Errorf("shareit-xxx isServiceFenced %+v", svc)
 		if svc != nil && r.isServiceFenced(ctx, svc) {
@@ -357,7 +414,7 @@ func (r *ServicefenceReconciler) refreshFenceStatusOfService(ctx context.Context
 			markFenceCreatedByController(sf)
 			model.PatchIstioRevLabel(&sf.Labels, r.env.IstioRev())
 			// log.Errorf("shareit-xxx sf %+v", sf)
-
+			log.Infof("create fence %s, %+v", nsName)
 			if err = r.Client.Create(ctx, sf); err != nil {
 				log.Errorf("create fence %s failed, %+v", nsName, err)
 				return reconcile.Result{}, err
@@ -368,6 +425,7 @@ func (r *ServicefenceReconciler) refreshFenceStatusOfService(ctx context.Context
 		log.Errorf("existed fence %v istioRev %s but our rev %s, skip ...",
 			nsName, rev, r.env.IstioRev())
 	} else if isFenceCreatedByController(sf) && (svc == nil || !r.isServiceFenced(ctx, svc)) {
+		log.Infof("delete fence: %s", nsName)
 		if err := r.Client.Delete(ctx, sf); err != nil {
 			log.Errorf("delete fence %s failed, %+v", nsName, err)
 		}

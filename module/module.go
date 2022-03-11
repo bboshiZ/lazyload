@@ -81,7 +81,7 @@ func (mo *Module) InitManager(mgr manager.Manager, env bootstrap.Environment, cb
 
 	ctx := context.Background()
 	// stopCh := make(chan struct{})
-	go sfReconciler.ServiceController.Run(1, ctx.Done())
+	go sfReconciler.ServiceController.Run(4, ctx.Done())
 
 	return nil
 }

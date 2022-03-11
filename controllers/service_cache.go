@@ -128,9 +128,11 @@ func newSvcCacheMultiK8s(clientSets []*kubernetes.Clientset, sc *ServiceControll
 	log := log.WithField("function", "newLabelSvcCache")
 	nsSvcCache := &NsSvcCache{Data: map[string]map[string]struct{}{}}
 	labelSvcCache := &LabelSvcCache{Data: map[LabelItem]map[string]struct{}{}}
-
+	// fenceCache := map[string]string{}
+	fenceCacheClusterCache := make([]map[string]string, len(clientSets))
 	// init labelSvcCache
 	for i := range clientSets {
+		fenceCacheClusterCache[i] = map[string]string{}
 		clientSet := clientSets[i]
 		services, err := clientSet.CoreV1().Services("").List(metav1.ListOptions{})
 		if err != nil {
@@ -140,16 +142,12 @@ func newSvcCacheMultiK8s(clientSets []*kubernetes.Clientset, sc *ServiceControll
 		for _, service := range services.Items {
 			ns := service.GetNamespace()
 			name := service.GetName()
-			// r := &ctrl.Request{types.NamespacedName{Namespace: ns, Name: name}}
-			// r.Namespace = ns
-			// r.Name = name
-			// r.Namespace
-			// sc.add(ctrl.Request{types.NamespacedName{Namespace: ns, Name: name}})
 			svc := ns + "/" + name
 			if nsSvcCache.Data[ns] == nil {
 				nsSvcCache.Data[ns] = make(map[string]struct{})
 			}
 			nsSvcCache.Data[ns][svc] = struct{}{}
+			fenceCacheClusterCache[i][svc] = "none"
 			for k, v := range service.GetLabels() {
 				label := LabelItem{
 					Name:  k,
@@ -163,9 +161,17 @@ func newSvcCacheMultiK8s(clientSets []*kubernetes.Clientset, sc *ServiceControll
 				labelSvcCache.Data[label][svc] = struct{}{}
 				labelSvcCache.Unlock()
 
+				// fenceCacheClusterCache[i][svc] = "none"
+				if service.Labels != nil {
+					if l, ok := service.Labels[LabelServiceFenced]; ok {
+						fenceCacheClusterCache[i][svc] = l
+					}
+				}
 			}
+
 		}
 
+		// log.Errorf("fenceCacheClusterCache-xxx-info:index:%d,value:%+v", i, fenceCacheClusterCache)
 		// init service watcher
 		servicesClient := clientSet.CoreV1().Services("")
 		lw := &cache.ListWatch{
@@ -178,7 +184,7 @@ func newSvcCacheMultiK8s(clientSets []*kubernetes.Clientset, sc *ServiceControll
 		}
 		watcher := util.ListWatcher(context.Background(), lw)
 
-		go func() {
+		go func(clusterIndex int) {
 			log.Infof("Service cacher is running")
 			for {
 				e, ok := <-watcher.ResultChan()
@@ -195,7 +201,21 @@ func newSvcCacheMultiK8s(clientSets []*kubernetes.Clientset, sc *ServiceControll
 				ns := service.GetNamespace()
 				name := service.GetName()
 				eventSvc := ns + "/" + name
-				sc.add(ctrl.Request{types.NamespacedName{Namespace: ns, Name: name}})
+
+				currentFencd := "none"
+				if service.Labels != nil {
+					if l, ok := service.Labels[LabelServiceFenced]; ok {
+						currentFencd = l
+					}
+				}
+				if currentFencd != fenceCacheClusterCache[clusterIndex][eventSvc] {
+					// log.Errorf("fenceCacheClusterCache-xxxa:%+v", clusterIndex)
+					// log.Errorf("fenceCacheClusterCache-xxxb:%+v", eventSvc)
+					// log.Errorf("fenceCacheClusterCache-xxxc:%+v,%+v", currentFencd, fenceCacheClusterCache[clusterIndex][eventSvc])
+
+					fenceCacheClusterCache[clusterIndex][eventSvc] = currentFencd
+					sc.add(ctrl.Request{types.NamespacedName{Namespace: ns, Name: name}})
+				}
 
 				// delete eventSvc from labelSvcCache to ensure final consistency
 				labelSvcCache.Lock()
@@ -240,7 +260,7 @@ func newSvcCacheMultiK8s(clientSets []*kubernetes.Clientset, sc *ServiceControll
 				labelSvcCache.Unlock()
 
 			}
-		}()
+		}(i)
 	}
 	return nsSvcCache, labelSvcCache, nil
 

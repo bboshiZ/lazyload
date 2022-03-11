@@ -132,7 +132,7 @@ func NewReconciler(cfg *v1alpha1.Fence, mgr manager.Manager, env bootstrap.Envir
 	}
 
 	// var ctx context.Context
-	// go serviceController.Run(2, ctx.Done())
+	// go r.ServiceController.Run(2, ctx.Done())
 
 	return r
 }
@@ -673,15 +673,33 @@ func (r *ServicefenceReconciler) newSidecar(sf *lazyloadv1alpha1.ServiceFence, e
 		Namespace: sf.Namespace,
 	}
 
+	// svc := &corev1.Service{}
+	// if err := r.Client.Get(context.TODO(), nsName, svc); err != nil {
+	// 	if errors.IsNotFound(err) {
+	// 		log.Warningf("cannot find service %s for servicefence, skip sidecar generating", nsName)
+	// 		return nil, nil
+	// 	} else {
+	// 		log.Errorf("get service %s error, %+v", nsName, err)
+	// 		return nil, err
+	// 	}
+	// }
+
 	svc := &corev1.Service{}
-	if err := r.Client.Get(context.TODO(), nsName, svc); err != nil {
-		if errors.IsNotFound(err) {
-			log.Warningf("cannot find service %s for servicefence, skip sidecar generating", nsName)
-			return nil, nil
+	var err error
+	for _, rClient := range r.RemoteClients {
+		svc, err = rClient.CoreV1().Services(nsName.Namespace).Get(nsName.Name, metav1.GetOptions{})
+		if err != nil {
+			if errors.IsNotFound(err) {
+				// log.Warningf("cannot find service %s for servicefence, skip sidecar generating", nsName)
+				continue
+			} else {
+				log.Errorf("get service %s error, %+v", nsName, err)
+				continue
+			}
 		} else {
-			log.Errorf("get service %s error, %+v", nsName, err)
-			return nil, err
+			break
 		}
+
 	}
 
 	// generate sidecar.spec.workloadSelector
