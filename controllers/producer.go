@@ -31,6 +31,7 @@ const (
 	AccessLogConvertorName     = "lazyload-accesslog-convertor"
 	MetricSourceTypePrometheus = "prometheus"
 	MetricSourceTypeAccesslog  = "accesslog"
+	MetricGloabalProxy         = "global-proxy"
 )
 
 // call back function for watcher producer
@@ -67,6 +68,8 @@ func (r *ServicefenceReconciler) handleWatcherEvent(event trigger.WatcherEvent) 
 				Query: "",
 			},
 		}
+	case MetricGloabalProxy:
+
 	}
 
 	qm[event.NN.String()] = hs

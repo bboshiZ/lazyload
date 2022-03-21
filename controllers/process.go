@@ -158,10 +158,18 @@ func (r *ServicefenceReconciler) ReconcileService(req ctrl.Request) (ctrl.Result
 
 func (r *ServicefenceReconciler) ReconcileNamespace(req ctrl.Request) (ret ctrl.Result, err error) {
 	ctx := context.TODO()
-
+	if req.Name == "" {
+		return reconcile.Result{}, nil // do not process deletion ...
+	}
 	// Fetch the Service instance
 	ns := &corev1.Namespace{}
 	err = r.Client.Get(ctx, req.NamespacedName, ns)
+
+	// log.Errorf("ReconcileNamespace-xxx-req:%s", req.NamespacedName.Namespace)
+	// log.Errorf("ReconcileNamespace-xxx-req:%s", req.NamespacedName)
+	// log.Errorf("ReconcileNamespace-xxx-req:%s", req.Name)
+
+	// log.Errorf("ReconcileNamespace-xxx-ns: %+v", ns)
 
 	r.reconcileLock.Lock()
 	defer r.reconcileLock.Unlock()
@@ -207,7 +215,7 @@ func (r *ServicefenceReconciler) ReconcileNamespace(req ctrl.Request) (ret ctrl.
 		}()
 	}
 
-	if req.NamespacedName.Namespace == "sample" {
+	if req.Name == "sample" {
 		log.Errorf("ReconcileNamespace-xxx nsFenced, %+v", nsFenced)
 	}
 
@@ -215,8 +223,11 @@ func (r *ServicefenceReconciler) ReconcileNamespace(req ctrl.Request) (ret ctrl.
 		sfList := &lazyloadv1alpha1.ServiceFenceList{}
 		// log.Errorf("ReconcileNamespace-xxx DeleteAllOf-list,%+v", sfList.Items)
 
-		err := r.Client.List(ctx, sfList, &ctrlClient.ListOptions{Namespace: req.Namespace})
-		// log.Errorf("ReconcileNamespace-xxxaa DeleteAllOf, %+v,%+v", sfList, err)
+		err := r.Client.List(ctx, sfList, &ctrlClient.ListOptions{Namespace: req.Name})
+		// log.Errorf("ReconcileNamespace-xxxaa-req:%+v", req)
+		// log.Errorf("ReconcileNamespace-aaaa-sfList:%s,xxxxxxxx,%+v,%+v", req.Namespace, sfList, err)
+		// log.Errorf("ReconcileNamespace-aaaa-sfList-xx:%s", req.NamespacedName)
+
 		if err != nil {
 			log.Errorf("get ServiceFenceList error, %+v", err)
 			return reconcile.Result{}, err
@@ -236,7 +247,7 @@ func (r *ServicefenceReconciler) ReconcileNamespace(req ctrl.Request) (ret ctrl.
 				},
 			}
 			// log.Errorf("ReconcileNamespace-xxxaa Delete, %+v", sf)
-			log.Errorf("delete fence-xxx %s", sf)
+			log.Errorf("delete fence-xxx %+v", sf)
 			if err := r.Client.Delete(ctx, sf); err != nil {
 				log.Errorf("delete fence %s failed, %+v", sf, err)
 			}
@@ -348,9 +359,9 @@ func (r *ServicefenceReconciler) refreshFenceStatusOfService(ctx context.Context
 		var err error
 		for _, rClient := range r.RemoteClients {
 			svc, err = rClient.CoreV1().Services(nsName.Namespace).Get(nsName.Name, metav1.GetOptions{})
-			if nsName.Name == "sleep" {
-				log.Errorf("shareit-xxx Services get:%+v, %+v", svc, err)
-			}
+			// if nsName.Name == "sleep" {
+			// 	log.Errorf("shareit-xxx Services get:%+v, %+v", svc, err)
+			// }
 			// log.Errorf("shareit-xxx Services get:%+v, %+v", svc, err)
 
 			if err != nil {

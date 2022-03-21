@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"reflect"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -219,9 +220,12 @@ func (r *ServicefenceReconciler) refreshSidecar(instance *lazyloadv1alpha1.Servi
 
 	// Check if this Pod already exists
 	found := &v1alpha3.Sidecar{}
+	// found := &v1alpha3.LazyloadSidecar{}
+	// log.Infof("CrefreshSidecar-xxx %+v:%+v", found, found.Spec["egress"])
+
 	nsName := types.NamespacedName{Name: sidecar.Name, Namespace: sidecar.Namespace}
 	err = r.Client.Get(context.TODO(), nsName, found)
-
+	log.Infof("CrefreshSidecar-xxx %+v,%+v,%+v", found, found.Spec["egress"], err)
 	if err != nil {
 		if errors.IsNotFound(err) {
 			found = nil
@@ -244,7 +248,9 @@ func (r *ServicefenceReconciler) refreshSidecar(instance *lazyloadv1alpha1.Servi
 		if !reflect.DeepEqual(found.Spec, sidecar.Spec) {
 			log.Infof("Update a Sidecar in %s:%s", sidecar.Namespace, sidecar.Name)
 			sidecar.ResourceVersion = found.ResourceVersion
-			err = r.Client.Update(context.TODO(), sidecar)
+			r.updateSidecar(found, instance)
+			// err = r.Client.Update(context.TODO(), sidecar)
+			err = r.Client.Update(context.TODO(), found)
 			if err != nil {
 				return err
 			}
@@ -252,6 +258,110 @@ func (r *ServicefenceReconciler) refreshSidecar(instance *lazyloadv1alpha1.Servi
 	}
 
 	return nil
+}
+
+func (r *ServicefenceReconciler) updateSidecar(old *v1alpha3.Sidecar, sf *lazyloadv1alpha1.ServiceFence) {
+	// sidecar
+	// log.Infof("updateSidecar-xxx-in:%+v", old.Spec["egress"])
+
+	// if egressList, ok := old.Spec["egress"].([]map[string][]string); ok {
+	if egressList, ok := old.Spec["egress"].([]interface{}); ok {
+
+		// time="2022-03-18T08:54:23Z" level=info msg="updateSidecar-xxx-in-1:[map[hosts:[istio-system/* sgt/*]]]" module=lazyload pkg=controllers
+		// log.Infof("updateSidecar-xxx-in-1:%+v,%d", egressList, len(egressList))
+		if len(egressList) > 0 {
+			if data, ok := egressList[0].(map[string]interface{}); ok {
+				// log.Infof("updateSidecar-xxx-in-2:%+v", data)
+
+				if hostData, ok := data["hosts"].([]interface{}); ok {
+					var oldHosts []string
+					// oldHosts := data["hosts"]
+					// if oldHosts, ok := egressList[0]["hosts"]; ok {
+					for _, d := range hostData {
+						oldHosts = append(oldHosts, d.(string))
+
+					}
+					// log.Infof("updateSidecar-xxx-in-3:%+v", oldHosts)
+
+					hosts := make([]string, 0)
+					if !sf.Spec.Enable {
+						return
+					}
+
+					for _, ns := range r.defaultAddNamespaces {
+						hosts = append(hosts, ns+"/*")
+					}
+
+					for k, v := range sf.Status.Domains {
+						if v.Status == lazyloadv1alpha1.Destinations_ACTIVE || v.Status == lazyloadv1alpha1.Destinations_EXPIREWAIT {
+							if strings.HasSuffix(k, "/*") {
+								if !r.isDefaultAddNs(k) {
+									hosts = append(hosts, k)
+								}
+							}
+
+							for _, h := range v.Hosts {
+								hosts = append(hosts, "*/"+h)
+							}
+						}
+					}
+
+					// check whether using namespace global-sidecar
+					// if so, init config of sidecar will adds */global-sidecar.${svf.ns}.svc.cluster.local
+					// if env.Config.Global.Misc["globalSidecarMode"] == "namespace" {
+					// 	hosts = append(hosts, fmt.Sprintf("./global-sidecar.%s.svc.cluster.local", sf.Namespace))
+					// }
+
+					// remove duplicated hosts
+					noDupHosts := make([]string, 0, len(hosts))
+					temp := map[string]struct{}{}
+					for _, item := range hosts {
+						if _, ok := temp[item]; !ok {
+							temp[item] = struct{}{}
+							noDupHosts = append(noDupHosts, item)
+						}
+					}
+					// hosts = noDupHosts
+
+					// sort hosts so that it follows the Equals semantics
+					// sort.Strings(hosts)
+					var exist bool
+					for _, nh := range noDupHosts {
+						exist = false
+						for _, h := range oldHosts {
+							// log.Infof("updateSidecar-xxx-in-777:%+v,%+v,%+v", nh, h, h == nh)
+
+							if nh == h {
+								// log.Infof("updateSidecar-xxx-exist-777:%+v,%+v,%+v", nh, h, h == nh)
+								// log.Infof("updateSidecar-xxx-in-3:%+v", oldHosts)
+								exist = true
+								break
+							}
+						}
+						if !exist {
+							// log.Infof("updateSidecar-xxx-add-host-888:%+v", nh)
+							oldHosts = append(oldHosts, nh)
+						}
+					}
+					sort.Strings(oldHosts)
+
+					// old.Spec["egress"].([]map[string][]string)[0]["host"] = noDupHosts
+					old.Spec["egress"] = []map[string][]string{
+						{"hosts": oldHosts},
+					}
+					// log.Infof("updateSidecar-xxx-999:%+v", old)
+				}
+			}
+		}
+
+	} else {
+
+	}
+
+	return
+	// for _, host := range new.Egress {
+
+	// }
 }
 
 // recordVisitor update the dest servicefences' visitor according to src sf's visit diff
@@ -630,7 +740,18 @@ func (r *ServicefenceReconciler) newSidecar(sf *lazyloadv1alpha1.ServiceFence, e
 			}
 
 			for _, h := range v.Hosts {
-				hosts = append(hosts, "*/"+h)
+				for k, m := range sf.Status.MetricStatus {
+					if strings.Contains(k, h) {
+						num, err := strconv.Atoi(m)
+						if err != nil {
+							log.Errorf("strconv.Atoi error:%+v", err)
+						}
+						if num > 0 {
+							hosts = append(hosts, "*/"+h)
+						}
+					}
+				}
+				// hosts = append(hosts, "*/"+h)
 			}
 		}
 	}

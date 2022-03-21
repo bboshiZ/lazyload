@@ -293,6 +293,17 @@ type Sidecar struct {
 	Spec               map[string]interface{} `json:"spec"`
 }
 
+// func (in *Sidecar) GetSpecStruct() map[string]interface{} {
+
+// }
+
+// type LazyloadSidecar struct {
+// 	meta_v1.TypeMeta   `json:",inline"`
+// 	meta_v1.ObjectMeta `json:"metadata"`
+// 	// Spec               map[string]interface{} `json:"spec"`
+// 	Spec ServiceFenceSpec `json:"spec,omitempty"`
+// }
+
 // GetSpec from a wrapper
 func (in *Sidecar) GetSpec() map[string]interface{} {
 	return in.Spec
