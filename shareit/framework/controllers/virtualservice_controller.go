@@ -18,6 +18,8 @@ package controllers
 
 import (
 	"context"
+	"fmt"
+	"strings"
 
 	log "github.com/sirupsen/logrus"
 	"slime.io/slime/framework/bootstrap"
@@ -77,6 +79,11 @@ func (r *VirtualServiceReconciler) Reconcile(req ctrl.Request) (ctrl.Result, err
 		HostDestinationMapping.Set(k, v)
 	}
 
+	vm := parseVirDestination(instance)
+	log.Infof("get virtualService destination after parse, %+v", vm)
+	for k, v := range vm {
+		VirHostDestinationMapping.Set(k, v)
+	}
 	return ctrl.Result{}, nil
 }
 
@@ -127,4 +134,72 @@ func (r *VirtualServiceReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&networkingistioiov1alpha3.VirtualService{}).
 		Complete(r)
+}
+
+func praseDstHost(host, ns string) string {
+	fullHost := host
+	subDomains := strings.Split(host, ".")
+	switch len(subDomains) {
+	// full service name, like "reviews.default.svc.cluster.local", needs no action
+	case 5:
+	// short service name without namespace, like "reviews", needs to add namespace of servicefence and "svc.cluster.local"
+	case 1:
+		fullHost = fmt.Sprintf("%s.%s.svc.cluster.local", subDomains[0], ns)
+	// short service name with namespace, like "reviews.default", needs to add "svc.cluster.local"
+	case 2:
+		fullHost = fmt.Sprintf("%s.%s.svc.cluster.local", subDomains[0], subDomains[1])
+	default:
+
+	}
+
+	return fullHost
+
+}
+
+func parseVirDestination(instance *networkingistioiov1alpha3.VirtualService) map[string][]string {
+	ret := make(map[string][]string)
+
+	hosts := make([]string, 0)
+	i, ok := instance.Spec[vsHosts].([]interface{})
+	if !ok {
+		return nil
+	}
+	for _, iv := range i {
+		s := iv.(string)
+		if strings.Contains(s, ".") && !strings.Contains(s, "cluster.local") {
+			hosts = append(hosts, iv.(string))
+		}
+		// hosts = append(hosts, iv.(string))
+	}
+
+	dhs := make(map[string]struct{}, 0)
+
+	if httpRoutes, ok := instance.Spec[vsHttp].([]interface{}); ok {
+		for _, httpRoute := range httpRoutes {
+			if hr, ok := httpRoute.(map[string]interface{}); ok {
+				if ds, ok := hr[vsRoute].([]interface{}); ok {
+					for _, d := range ds {
+						if route, ok := d.(map[string]interface{}); ok {
+							destinationHost := route[vsDestination].(map[string]interface{})[vsHost].(string)
+							fullHost := praseDstHost(destinationHost, instance.Namespace)
+							dhs[fullHost] = struct{}{}
+						}
+					}
+				}
+			}
+		}
+	}
+
+	for _, h := range hosts {
+		for dh := range dhs {
+			if h != dh {
+				if ret[h] == nil {
+					ret[h] = []string{dh}
+				} else {
+					ret[h] = append(ret[h], dh)
+				}
+			}
+		}
+	}
+	return ret
 }

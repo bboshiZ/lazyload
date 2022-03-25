@@ -13,11 +13,17 @@ var HostSubsetMapping *util.SubcribeableMap
 // HostDestinationMapping You can query the back-end service of the host, which is defined in the VirtualService
 var HostDestinationMapping *util.SubcribeableMap
 
+var VirHostDestinationMapping *util.SubcribeableMap
+
 func init() {
 	if HostSubsetMapping == nil {
 		HostSubsetMapping = util.NewSubcribeableMap()
 	}
 	if HostDestinationMapping == nil {
 		HostDestinationMapping = util.NewSubcribeableMap()
+	}
+
+	if VirHostDestinationMapping == nil {
+		VirHostDestinationMapping = util.NewSubcribeableMap()
 	}
 }

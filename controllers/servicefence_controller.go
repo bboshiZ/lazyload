@@ -19,6 +19,7 @@ package controllers
 import (
 	"context"
 	"fmt"
+	"net"
 	"reflect"
 	"sort"
 	"strconv"
@@ -37,7 +38,6 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
 	queue "k8s.io/client-go/util/workqueue"
-	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
@@ -202,7 +202,9 @@ func (r *ServicefenceReconciler) getInterestMeta() map[string]bool {
 
 func (r *ServicefenceReconciler) refreshSidecar(instance *lazyloadv1alpha1.ServiceFence) error {
 	log := log.WithField("reporter", "ServicefenceReconciler").WithField("function", "refreshSidecar")
-	sidecar, err := r.newSidecar(instance, r.env)
+	sidecar, sfHosts, err := r.newSidecar(instance, r.env)
+	log.Infof("CrefreshSidecar-newSidecar-xxx %+v,%+v", sidecar, err)
+
 	if err != nil {
 		log.Errorf("servicefence generate sidecar failed, %+v", err)
 		return err
@@ -211,10 +213,10 @@ func (r *ServicefenceReconciler) refreshSidecar(instance *lazyloadv1alpha1.Servi
 		return nil
 	}
 	// Set VisitedHost instance as the owner and controller
-	if err := controllerutil.SetControllerReference(instance, sidecar, r.Scheme); err != nil {
-		log.Errorf("attach ownerReference to sidecar failed, %+v", err)
-		return err
-	}
+	// if err := controllerutil.SetControllerReference(instance, sidecar, r.Scheme); err != nil {
+	// 	log.Errorf("attach ownerReference to sidecar failed, %+v", err)
+	// 	return err
+	// }
 	sfRev := model.IstioRevFromLabel(instance.Labels)
 	model.PatchIstioRevLabel(&sidecar.Labels, sfRev)
 
@@ -225,7 +227,9 @@ func (r *ServicefenceReconciler) refreshSidecar(instance *lazyloadv1alpha1.Servi
 
 	nsName := types.NamespacedName{Name: sidecar.Name, Namespace: sidecar.Namespace}
 	err = r.Client.Get(context.TODO(), nsName, found)
-	log.Infof("CrefreshSidecar-xxx %+v,%+v,%+v", found, found.Spec["egress"], err)
+	log.Infof("CrefreshSidecar-Get-xxx %+v,%+v,%+v", found, found.Spec["egress"], err)
+	// log.Infof("CrefreshSidecar-xxx %+v,%+v,%+v", found, found.Spec["egress"], err)
+
 	if err != nil {
 		if errors.IsNotFound(err) {
 			found = nil
@@ -248,7 +252,7 @@ func (r *ServicefenceReconciler) refreshSidecar(instance *lazyloadv1alpha1.Servi
 		if !reflect.DeepEqual(found.Spec, sidecar.Spec) {
 			log.Infof("Update a Sidecar in %s:%s", sidecar.Namespace, sidecar.Name)
 			sidecar.ResourceVersion = found.ResourceVersion
-			r.updateSidecar(found, instance)
+			r.updateSidecar(found, sfHosts)
 			// err = r.Client.Update(context.TODO(), sidecar)
 			err = r.Client.Update(context.TODO(), found)
 			if err != nil {
@@ -260,7 +264,7 @@ func (r *ServicefenceReconciler) refreshSidecar(instance *lazyloadv1alpha1.Servi
 	return nil
 }
 
-func (r *ServicefenceReconciler) updateSidecar(old *v1alpha3.Sidecar, sf *lazyloadv1alpha1.ServiceFence) {
+func (r *ServicefenceReconciler) updateSidecar(old *v1alpha3.Sidecar, sfHosts []string) {
 	// sidecar
 	// log.Infof("updateSidecar-xxx-in:%+v", old.Spec["egress"])
 
@@ -274,63 +278,18 @@ func (r *ServicefenceReconciler) updateSidecar(old *v1alpha3.Sidecar, sf *lazylo
 				// log.Infof("updateSidecar-xxx-in-2:%+v", data)
 
 				if hostData, ok := data["hosts"].([]interface{}); ok {
-					var oldHosts []string
+					var newHosts []string
 					// oldHosts := data["hosts"]
 					// if oldHosts, ok := egressList[0]["hosts"]; ok {
 					for _, d := range hostData {
-						oldHosts = append(oldHosts, d.(string))
-
-					}
-					// log.Infof("updateSidecar-xxx-in-3:%+v", oldHosts)
-
-					hosts := make([]string, 0)
-					if !sf.Spec.Enable {
-						return
+						newHosts = append(newHosts, d.(string))
 					}
 
-					for _, ns := range r.defaultAddNamespaces {
-						hosts = append(hosts, ns+"/*")
-					}
-
-					for k, v := range sf.Status.Domains {
-						if v.Status == lazyloadv1alpha1.Destinations_ACTIVE || v.Status == lazyloadv1alpha1.Destinations_EXPIREWAIT {
-							if strings.HasSuffix(k, "/*") {
-								if !r.isDefaultAddNs(k) {
-									hosts = append(hosts, k)
-								}
-							}
-
-							for _, h := range v.Hosts {
-								hosts = append(hosts, "*/"+h)
-							}
-						}
-					}
-
-					// check whether using namespace global-sidecar
-					// if so, init config of sidecar will adds */global-sidecar.${svf.ns}.svc.cluster.local
-					// if env.Config.Global.Misc["globalSidecarMode"] == "namespace" {
-					// 	hosts = append(hosts, fmt.Sprintf("./global-sidecar.%s.svc.cluster.local", sf.Namespace))
-					// }
-
-					// remove duplicated hosts
-					noDupHosts := make([]string, 0, len(hosts))
-					temp := map[string]struct{}{}
-					for _, item := range hosts {
-						if _, ok := temp[item]; !ok {
-							temp[item] = struct{}{}
-							noDupHosts = append(noDupHosts, item)
-						}
-					}
-					// hosts = noDupHosts
-
-					// sort hosts so that it follows the Equals semantics
-					// sort.Strings(hosts)
 					var exist bool
-					for _, nh := range noDupHosts {
+					for _, nh := range sfHosts {
 						exist = false
-						for _, h := range oldHosts {
+						for _, h := range newHosts {
 							// log.Infof("updateSidecar-xxx-in-777:%+v,%+v,%+v", nh, h, h == nh)
-
 							if nh == h {
 								// log.Infof("updateSidecar-xxx-exist-777:%+v,%+v,%+v", nh, h, h == nh)
 								// log.Infof("updateSidecar-xxx-in-3:%+v", oldHosts)
@@ -340,14 +299,12 @@ func (r *ServicefenceReconciler) updateSidecar(old *v1alpha3.Sidecar, sf *lazylo
 						}
 						if !exist {
 							// log.Infof("updateSidecar-xxx-add-host-888:%+v", nh)
-							oldHosts = append(oldHosts, nh)
+							newHosts = append(newHosts, nh)
 						}
 					}
-					sort.Strings(oldHosts)
-
-					// old.Spec["egress"].([]map[string][]string)[0]["host"] = noDupHosts
+					sort.Strings(newHosts)
 					old.Spec["egress"] = []map[string][]string{
-						{"hosts": oldHosts},
+						{"hosts": newHosts},
 					}
 					// log.Infof("updateSidecar-xxx-999:%+v", old)
 				}
@@ -359,9 +316,7 @@ func (r *ServicefenceReconciler) updateSidecar(old *v1alpha3.Sidecar, sf *lazylo
 	}
 
 	return
-	// for _, host := range new.Egress {
 
-	// }
 }
 
 // recordVisitor update the dest servicefences' visitor according to src sf's visit diff
@@ -667,8 +622,172 @@ func addDomainsWithLabelSelector(domains map[string]*lazyloadv1alpha1.Destinatio
 
 }
 
+func praseHost(h string, ns string) string {
+	var fullHost string
+	subDomains := strings.Split(h, ".")
+	switch len(subDomains) {
+	// full service name, like "reviews.default.svc.cluster.local", needs no action
+	case 5:
+	// short service name without namespace, like "reviews", needs to add namespace of servicefence and "svc.cluster.local"
+	case 1:
+		fullHost = fmt.Sprintf("%s.%s.svc.cluster.local", subDomains[0], ns)
+	// short service name with namespace, like "reviews.default", needs to add "svc.cluster.local"
+	case 2:
+		fullHost = fmt.Sprintf("%s.%s.svc.cluster.local", subDomains[0], subDomains[1])
+	default:
+
+	}
+
+	return fullHost
+}
+
+// {destination_service="helloworld:5000", destination_service_name="PassthroughCluster"}
+func praseMetric(metricName string, svc, ns string) (fullHost string) {
+	metricName = strings.Trim(metricName, "{}")
+	mn := strings.Split(metricName, ",")
+	for _, m := range mn {
+		var sh []string
+		if strings.Contains(m, svc) {
+			sh = strings.Split(m, "\"")
+			if len(sh) != 3 {
+				return
+			}
+			h := strings.SplitN(sh[1], ":", 2)[0]
+
+			subDomains := strings.Split(h, ".")
+			switch len(subDomains) {
+			// full service name, like "reviews.default.svc.cluster.local", needs no action
+			case 5:
+				fullHost = h
+			// short service name without namespace, like "reviews", needs to add namespace of servicefence and "svc.cluster.local"
+			case 1:
+				fullHost = fmt.Sprintf("%s.%s.svc.cluster.local", subDomains[0], ns)
+			// short service name with namespace, like "reviews.default", needs to add "svc.cluster.local"
+			case 2:
+				fullHost = fmt.Sprintf("%s.%s.svc.cluster.local", subDomains[0], subDomains[1])
+			default:
+				fullHost = h
+
+			}
+		}
+		return
+
+	}
+
+	return
+}
+
 // update domains with Status.MetricStatus
 func addDomainsWithMetricStatus(domains map[string]*lazyloadv1alpha1.Destinations, sf *lazyloadv1alpha1.ServiceFence) {
+	// log.Errorf("addDomainsWithMetricStatus domains-xxx:,%+v", domains)
+	// log.Errorf("addDomainsWithMetricStatus sf-xxx:,%+v", sf)
+	var h, ns, fullHost string
+	var appFound, nsFound bool
+
+	for metricName, val := range sf.Status.MetricStatus {
+		log.Errorf("addDomainsWithMetricStatus metricName-xxx:%+v", metricName)
+		log.Errorf("addDomainsWithMetricStatus val-xxx:,%+v", val)
+		metricName = strings.Trim(metricName, "{}")
+		if strings.Contains(metricName, "destination_service_name=\"PassthroughCluster\"") {
+			fullHost = praseMetric(metricName, "destination_service", sf.Namespace)
+			log.Errorf("addDomainsWithMetricStatus PassthroughCluster-xxx:,%+v", fullHost)
+			if fullHost == "" {
+				continue
+			}
+
+			address := net.ParseIP(fullHost)
+			if address != nil {
+				continue
+			}
+
+			if hs := getVirDestination(fullHost); len(hs) > 0 {
+				// allHost := []string{}
+				log.Errorf("addDomainsWithMetricStatus getDestination-xxx:%+v", hs)
+				// allHost = append(allHost, hs...)
+				if !isValidHost(h) {
+					continue
+				}
+				if domains[fullHost] != nil { // XXX merge with status from config
+					for _, h := range hs {
+						found := false
+						for _, dh := range domains[fullHost].Hosts {
+							if dh == h {
+								found = true
+							}
+						}
+						if !found {
+							domains[h].Hosts = append(domains[h].Hosts, h)
+						}
+					}
+
+					continue
+				}
+
+				domains[fullHost] = &lazyloadv1alpha1.Destinations{
+					Hosts:  hs,
+					Status: lazyloadv1alpha1.Destinations_ACTIVE,
+				}
+
+				continue
+			}
+		} else {
+			if !strings.Contains(metricName, "destination_app") && !strings.Contains(metricName, "destination_service_namespace") {
+				continue
+			}
+			ss := strings.Split(metricName, ",")
+			appFound = false
+			nsFound = false
+			for _, s := range ss {
+				if strings.Contains(s, "destination_app") {
+					sh := strings.Split(s, "\"")
+					if len(sh) != 3 {
+						// found = false
+						break
+					}
+					h = strings.SplitN(sh[1], ":", 2)[0]
+					appFound = true
+
+				} else if strings.Contains(s, "destination_service_namespace") {
+					sn := strings.Split(s, "\"")
+					if len(sn) != 3 {
+						// found = false
+						break
+					}
+					ns = sn[1]
+					nsFound = true
+				}
+			}
+			if !appFound || !nsFound {
+				continue
+			}
+			if h == "" || h == "unknown" || ns == "istio-system" {
+				continue
+			}
+			fullHost = fmt.Sprintf("%s.%s.svc.cluster.local", h, ns)
+		}
+		if !isValidHost(fullHost) {
+			continue
+		}
+		if domains[fullHost] != nil { // XXX merge with status from config
+			continue
+		}
+
+		allHost := []string{fullHost}
+		if hs := getDestination(fullHost); len(hs) > 0 {
+			allHost = append(allHost, hs...)
+		}
+
+		log.Errorf("addDomainsWithMetricStatus allHost-xxx:%+v", allHost)
+
+		domains[fullHost] = &lazyloadv1alpha1.Destinations{
+			Hosts:  allHost,
+			Status: lazyloadv1alpha1.Destinations_ACTIVE,
+		}
+	}
+}
+
+// update domains with Status.MetricStatus
+func addDomainsWithMetricStatusOld(domains map[string]*lazyloadv1alpha1.Destinations, sf *lazyloadv1alpha1.ServiceFence) {
 
 	for metricName := range sf.Status.MetricStatus {
 		metricName = strings.Trim(metricName, "{}")
@@ -720,16 +839,19 @@ func addDomainsWithMetricStatus(domains map[string]*lazyloadv1alpha1.Destination
 	}
 }
 
-func (r *ServicefenceReconciler) newSidecar(sf *lazyloadv1alpha1.ServiceFence, env bootstrap.Environment) (*v1alpha3.Sidecar, error) {
+func (r *ServicefenceReconciler) newSidecar(sf *lazyloadv1alpha1.ServiceFence, env bootstrap.Environment) (*v1alpha3.Sidecar, []string, error) {
 	hosts := make([]string, 0)
 
 	if !sf.Spec.Enable {
-		return nil, nil
+		return nil, nil, nil
 	}
 
 	for _, ns := range r.defaultAddNamespaces {
 		hosts = append(hosts, ns+"/*")
 	}
+
+	// log.Infof("CrefreshSidecar-newSidecar-Domains-xxx %+v", sf.Status.Domains)
+	// log.Infof("CrefreshSidecar-newSidecar-MetricStatus-xxx %+v", sf.Status.MetricStatus)
 
 	for k, v := range sf.Status.Domains {
 		if v.Status == lazyloadv1alpha1.Destinations_ACTIVE || v.Status == lazyloadv1alpha1.Destinations_EXPIREWAIT {
@@ -740,14 +862,45 @@ func (r *ServicefenceReconciler) newSidecar(sf *lazyloadv1alpha1.ServiceFence, e
 			}
 
 			for _, h := range v.Hosts {
-				for k, m := range sf.Status.MetricStatus {
-					if strings.Contains(k, h) {
-						num, err := strconv.Atoi(m)
+				if sf.Name == "scmp-order-approve" {
+					log.Errorf("newSidecar-scmp-order-approve-h:%+v", h)
+					log.Errorf("newSidecar-scmp-order-approve-MetricStatus:%+v", sf.Status.MetricStatus)
+				}
+				for name, value := range sf.Status.MetricStatus {
+
+					if sf.Name == "scmp-order-approve" {
+						dstSvc := praseMetric(name, "destination_service", sf.Namespace)
+						log.Errorf("newSidecar-scmp-order-dstSvc-h:%+v", dstSvc)
+						log.Errorf("newSidecar-scmp-order-getVirDestination-h:%+v", getVirDestination(dstSvc))
+					}
+					// log.Infof("CrefreshSidecar-newSidecar-for-xxx %+v,%+v", k, m)
+					// dstApp := fmt.Sprintf("destination_app=\"%s\"", hs[0])
+					dstSvc := praseMetric(name, "destination_service", sf.Namespace)
+					// if strings.Contains(name, dstApp) || strings.Contains(k, dstSvc) {
+					if h == dstSvc {
+						num, err := strconv.Atoi(value)
 						if err != nil {
 							log.Errorf("strconv.Atoi error:%+v", err)
 						}
 						if num > 0 {
+							//xxxxxxxxxx
 							hosts = append(hosts, "*/"+h)
+						}
+					} else if vhs := getVirDestination(dstSvc); len(vhs) > 0 {
+						for _, vh := range vhs {
+							if sf.Name == "scmp-order-approve" {
+								log.Errorf("newSidecar-Name:%+v---%+v", vh, h)
+							}
+							if vh == h {
+								num, err := strconv.Atoi(value)
+								if err != nil {
+									log.Errorf("strconv.Atoi error:%+v", err)
+								}
+								if num > 0 {
+									//xxxxxxxxxx
+									hosts = append(hosts, "*/"+h)
+								}
+							}
 						}
 					}
 				}
@@ -755,6 +908,8 @@ func (r *ServicefenceReconciler) newSidecar(sf *lazyloadv1alpha1.ServiceFence, e
 			}
 		}
 	}
+
+	// log.Infof("CrefreshSidecar-genehosts-xxx %+v", hosts)
 
 	// check whether using namespace global-sidecar
 	// if so, init config of sidecar will adds */global-sidecar.${svf.ns}.svc.cluster.local
@@ -842,7 +997,7 @@ func (r *ServicefenceReconciler) newSidecar(sf *lazyloadv1alpha1.ServiceFence, e
 
 	spec, err := util.ProtoToMap(sidecar)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	ret := &v1alpha3.Sidecar{
 		ObjectMeta: metav1.ObjectMeta{
@@ -851,7 +1006,7 @@ func (r *ServicefenceReconciler) newSidecar(sf *lazyloadv1alpha1.ServiceFence, e
 		},
 		Spec: spec,
 	}
-	return ret, nil
+	return ret, hosts, nil
 }
 
 func (r *ServicefenceReconciler) Subscribe(host string, destination interface{}) { // FIXME not used?
@@ -890,7 +1045,7 @@ func (r *ServicefenceReconciler) Subscribe(host string, destination interface{})
 
 		r.updateVisitedHostStatus(visitorSf)
 
-		sidecar, err := r.newSidecar(visitorSf, r.env)
+		sidecar, sfHosts, err := r.newSidecar(visitorSf, r.env)
 		if sidecar == nil {
 			continue
 		}
@@ -899,9 +1054,9 @@ func (r *ServicefenceReconciler) Subscribe(host string, destination interface{})
 		}
 
 		// Set VisitedHost instance as the owner and controller
-		if err := controllerutil.SetControllerReference(visitorSf, sidecar, r.Scheme); err != nil {
-			return
-		}
+		// if err := controllerutil.SetControllerReference(visitorSf, sidecar, r.Scheme); err != nil {
+		// 	return
+		// }
 		model.PatchIstioRevLabel(&sidecar.Labels, visitorRev)
 
 		// Check for existence
@@ -928,7 +1083,9 @@ func (r *ServicefenceReconciler) Subscribe(host string, destination interface{})
 		} else {
 			if !reflect.DeepEqual(found.Spec, sidecar.Spec) {
 				sidecar.ResourceVersion = found.ResourceVersion
-				err = r.Client.Update(context.TODO(), sidecar)
+				r.updateSidecar(found, sfHosts)
+
+				err = r.Client.Update(context.TODO(), found)
 
 				if err != nil {
 					log.Errorf("create sidecar %+v met err %v", sidecar, err)
@@ -942,6 +1099,15 @@ func (r *ServicefenceReconciler) Subscribe(host string, destination interface{})
 
 func getDestination(k string) []string {
 	if i := controllers.HostDestinationMapping.Get(k); i != nil {
+		if hs, ok := i.([]string); ok {
+			return hs
+		}
+	}
+	return nil
+}
+
+func getVirDestination(k string) []string {
+	if i := controllers.VirHostDestinationMapping.Get(k); i != nil {
 		if hs, ok := i.([]string); ok {
 			return hs
 		}

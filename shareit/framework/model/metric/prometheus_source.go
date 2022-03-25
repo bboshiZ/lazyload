@@ -43,10 +43,12 @@ func (ps *PrometheusSource) QueryMetric(queryMap QueryMap) (Metric, error) {
 		}
 
 		for _, handler := range handlers {
-			// log.Errorf("QueryMetric-xxxx:", handler.Query)
+			log.Errorf("QueryMetric--QueryMetric-xxxx:%+v,%+v", meta, handler)
+			// log.Errorf("QueryMetric--QueryMetric-xxxx:%+v", handler.Query)
+
 			queryValue, w, e := ps.api.Query(context.Background(), handler.Query, time.Now())
-			log.Errorf("QueryMetric-xxxx: %+v", handler.Query)
-			log.Errorf("QueryMetric-xxxx-queryValue:%+v", queryValue)
+			// log.Errorf("QueryMetric-xxxx: %+v", handler.Query)
+			// log.Errorf("QueryMetric-xxxx-queryValue:%+v", queryValue)
 
 			if e != nil {
 				log.Debugf("failed get metric from prometheus, name: %s, query: %s, error: %+v", handler.Name, handler.Query, e)
@@ -69,6 +71,7 @@ func (ps *PrometheusSource) QueryMetric(queryMap QueryMap) (Metric, error) {
 
 func defaultConvertor(qv prometheusModel.Value) map[string]string {
 	result := make(map[string]string)
+	// log.Errorf("defaultConvertor-qv.Type()-xxxx:%+v", qv.Type())
 
 	switch qv.Type() {
 	case prometheusModel.ValScalar:
@@ -76,11 +79,13 @@ func defaultConvertor(qv prometheusModel.Value) map[string]string {
 		result[scalar.Value.String()] = scalar.Timestamp.String()
 	case prometheusModel.ValVector:
 		vector := qv.(prometheusModel.Vector)
+		// log.Errorf("defaultConvertor-vector-xxxx:%+v", vector)
 		for _, vx := range vector {
 			result[vx.Metric.String()] = vx.Value.String()
 		}
 	case prometheusModel.ValMatrix:
 		matrix := qv.(prometheusModel.Matrix)
+		// log.Errorf("defaultConvertor-matrix-xxxx:%+v", matrix)
 		for _, sampleStream := range matrix {
 			v := ""
 			for _, sp := range sampleStream.Values {
@@ -92,6 +97,9 @@ func defaultConvertor(qv prometheusModel.Value) map[string]string {
 		str := qv.(*prometheusModel.String)
 		result[str.Value] = str.Timestamp.String()
 	}
+	// log.Errorf("defaultConvertor-qv-xxxx:%+v", qv)
+
+	// log.Errorf("defaultConvertor-result-xxxx:%+v", result)
 
 	return result
 }

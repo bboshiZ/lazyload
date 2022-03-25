@@ -2,6 +2,7 @@ package controllers
 
 import (
 	"context"
+	"strconv"
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
@@ -50,15 +51,36 @@ func (r *ServicefenceReconciler) WatchMetric() {
 }
 
 func (r *ServicefenceReconciler) ConsumeMetric(metric metric.Metric) {
+	log.Errorf("ConsumeMetric-xxxx:%+v", metric)
+
 	for meta, results := range metric {
-		log.Debugf("got metric for %s", meta)
+		log.Debugf("got metric for %s,results:%+v", meta, results)
 		namespace, name := strings.Split(meta, "/")[0], strings.Split(meta, "/")[1]
 		nn := types.NamespacedName{Namespace: namespace, Name: name}
-		if len(results) != 1 {
+		// value := map[string]string{}
+		// if len(results) != 1 {
+		// 	log.Errorf("wrong metric results length for %s", meta)
+		// 	continue
+		// }
+		l := len(results)
+		if l < 0 {
 			log.Errorf("wrong metric results length for %s", meta)
 			continue
 		}
 		value := results[0].Value
+		if l >= 1 {
+			for _, rv := range results[1:] {
+				for k, v := range rv.Value {
+					if ov, ok := value[k]; ok {
+						num1, _ := strconv.Atoi(v)
+						num2, _ := strconv.Atoi(ov)
+						value[k] = strconv.Itoa(num1 + num2)
+					} else {
+						value[k] = v
+					}
+				}
+			}
+		}
 		if _, err := r.Refresh(reconcile.Request{NamespacedName: nn}, value); err != nil {
 			log.Errorf("refresh error:%v", err)
 		}
