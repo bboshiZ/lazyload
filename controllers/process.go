@@ -136,8 +136,15 @@ func (r *ServicefenceReconciler) isServiceFenced(ctx context.Context, svc *corev
 		svcLabel = svc.Labels[LabelServiceFenced]
 	}
 
+	if svc.Name == "kubernetes" {
+		return false
+	}
 	if !r.enabledNamespaces[svc.Namespace] {
 		return false
+	}
+
+	if r.enabledNamespacesAllSvc[svc.Namespace] {
+		return true
 	}
 
 	switch svcLabel {
@@ -213,16 +220,20 @@ func (r *ServicefenceReconciler) ReconcileNamespace(req ctrl.Request) (ret ctrl.
 		}
 	}
 
-	var nsLabel string
+	var nsLabel, nsLabelAll string
 	if ns.Labels != nil {
 		nsLabel = ns.Labels[LabelServiceFenced]
+		nsLabelAll = ns.Labels["slime.io/serviceFencedAll"]
+
 	}
 
 	nsFenced := nsLabel == ServiceFencedTrue
-	if req.NamespacedName.Namespace == "sample" {
-		log.Errorf("ReconcileNamespace-aaa nsFenced, %+v", nsFenced)
-		log.Errorf("ReconcileNamespace-bbb  r.enabledNamespaces, %+v", r.enabledNamespaces)
-	}
+	// if req.NamespacedName.Namespace == "sample" {
+	// 	log.Errorf("ReconcileNamespace-aaa nsFenced, %+v", nsFenced)
+	// 	log.Errorf("ReconcileNamespace-bbb  r.enabledNamespaces, %+v", r.enabledNamespaces)
+	// }
+
+	r.enabledNamespacesAllSvc[req.Name] = nsLabelAll == ServiceFencedTrue
 
 	if nsFenced && r.enabledNamespaces[req.Name] {
 		return reconcile.Result{}, nil
@@ -237,9 +248,9 @@ func (r *ServicefenceReconciler) ReconcileNamespace(req ctrl.Request) (ret ctrl.
 		}()
 	}
 
-	if req.Name == "sample" {
-		log.Errorf("ReconcileNamespace-xxx nsFenced, %+v", nsFenced)
-	}
+	// if req.Name == "sample" {
+	// 	log.Errorf("ReconcileNamespace-xxx nsFenced, %+v", nsFenced)
+	// }
 
 	if !nsFenced {
 		sfList := &lazyloadv1alpha1.ServiceFenceList{}
@@ -301,6 +312,9 @@ func (r *ServicefenceReconciler) ReconcileNamespace(req ctrl.Request) (ret ctrl.
 		for _, rClient := range r.RemoteClients {
 			services, err := rClient.CoreV1().Services(req.Name).List(metav1.ListOptions{})
 			// log.Errorf("ReconcileNamespace-xxx add services, %+v,%+v", services, err)
+			// log.Infof("ReconcileNamespace get services, %+v,%+v", services.Items, rClient.DiscoveryClient)
+
+			// log.Infof("ReconcileNamespace r.enabledNamespacesAllSvc, %+v,%+v", r.enabledNamespaces, r.enabledNamespacesAllSvc)
 
 			if err != nil {
 				log.Errorf("list services %s failed, %+v", req.Name, err)
@@ -394,6 +408,9 @@ func (r *ServicefenceReconciler) refreshFenceStatusOfService(ctx context.Context
 				}
 			} else {
 				if svc.Labels != nil {
+					if r.enabledNamespacesAllSvc[nsName.Namespace] {
+						break
+					}
 					if fence, ok := svc.Labels[LabelServiceFenced]; ok {
 						if fence == ServiceFencedTrue {
 							break

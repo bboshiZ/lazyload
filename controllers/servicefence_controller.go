@@ -56,21 +56,22 @@ import (
 // ServicefenceReconciler reconciles a Servicefence object
 type ServicefenceReconciler struct {
 	client.Client
-	RemoteClients        []*kubernetes.Clientset
-	ServiceController    *ServiceController
-	Scheme               *runtime.Scheme
-	cfg                  *v1alpha1.Fence
-	env                  bootstrap.Environment
-	interestMeta         map[string]bool
-	interestMetaCopy     map[string]bool // for outside read
-	watcherMetricChan    <-chan metric.Metric
-	tickerMetricChan     <-chan metric.Metric
-	reconcileLock        sync.RWMutex
-	staleNamespaces      map[string]bool
-	enabledNamespaces    map[string]bool
-	nsSvcCache           *NsSvcCache
-	labelSvcCache        *LabelSvcCache
-	defaultAddNamespaces []string
+	RemoteClients           []*kubernetes.Clientset
+	ServiceController       *ServiceController
+	Scheme                  *runtime.Scheme
+	cfg                     *v1alpha1.Fence
+	env                     bootstrap.Environment
+	interestMeta            map[string]bool
+	interestMetaCopy        map[string]bool // for outside read
+	watcherMetricChan       <-chan metric.Metric
+	tickerMetricChan        <-chan metric.Metric
+	reconcileLock           sync.RWMutex
+	staleNamespaces         map[string]bool
+	enabledNamespaces       map[string]bool
+	enabledNamespacesAllSvc map[string]bool
+	nsSvcCache              *NsSvcCache
+	labelSvcCache           *LabelSvcCache
+	defaultAddNamespaces    []string
 }
 
 func ttt(req ctrl.Request) (ctrl.Result, error) {
@@ -91,17 +92,18 @@ func NewReconciler(cfg *v1alpha1.Fence, mgr manager.Manager, env bootstrap.Envir
 	}
 
 	r := &ServicefenceReconciler{
-		Client:               mgr.GetClient(),
-		RemoteClients:        env.K8SRemoteClients,
-		Scheme:               mgr.GetScheme(),
-		env:                  env,
-		interestMeta:         map[string]bool{},
-		interestMetaCopy:     map[string]bool{},
-		watcherMetricChan:    pc.WatcherProducerConfig.MetricChan,
-		tickerMetricChan:     pc.TickerProducerConfig.MetricChan,
-		staleNamespaces:      map[string]bool{},
-		enabledNamespaces:    map[string]bool{},
-		defaultAddNamespaces: []string{env.Config.Global.IstioNamespace, env.Config.Global.SlimeNamespace},
+		Client:                  mgr.GetClient(),
+		RemoteClients:           env.K8SRemoteClients,
+		Scheme:                  mgr.GetScheme(),
+		env:                     env,
+		interestMeta:            map[string]bool{},
+		interestMetaCopy:        map[string]bool{},
+		watcherMetricChan:       pc.WatcherProducerConfig.MetricChan,
+		tickerMetricChan:        pc.TickerProducerConfig.MetricChan,
+		staleNamespaces:         map[string]bool{},
+		enabledNamespaces:       map[string]bool{},
+		enabledNamespacesAllSvc: map[string]bool{},
+		defaultAddNamespaces:    []string{env.Config.Global.IstioNamespace, env.Config.Global.SlimeNamespace},
 	}
 
 	r.ServiceController = &ServiceController{
@@ -203,7 +205,7 @@ func (r *ServicefenceReconciler) getInterestMeta() map[string]bool {
 func (r *ServicefenceReconciler) refreshSidecar(instance *lazyloadv1alpha1.ServiceFence) error {
 	log := log.WithField("reporter", "ServicefenceReconciler").WithField("function", "refreshSidecar")
 	sidecar, sfHosts, err := r.newSidecar(instance, r.env)
-	log.Infof("CrefreshSidecar-newSidecar-xxx %+v,%+v", sidecar, err)
+	// log.Infof("CrefreshSidecar-newSidecar-xxx %+v,%+v", sidecar, err)
 
 	if err != nil {
 		log.Errorf("servicefence generate sidecar failed, %+v", err)
@@ -227,7 +229,7 @@ func (r *ServicefenceReconciler) refreshSidecar(instance *lazyloadv1alpha1.Servi
 
 	nsName := types.NamespacedName{Name: sidecar.Name, Namespace: sidecar.Namespace}
 	err = r.Client.Get(context.TODO(), nsName, found)
-	log.Infof("CrefreshSidecar-Get-xxx %+v,%+v,%+v", found, found.Spec["egress"], err)
+	// log.Infof("CrefreshSidecar-Get-xxx %+v,%+v,%+v", found, found.Spec["egress"], err)
 	// log.Infof("CrefreshSidecar-xxx %+v,%+v,%+v", found, found.Spec["egress"], err)
 
 	if err != nil {
@@ -684,9 +686,9 @@ func addDomainsWithMetricStatus(domains map[string]*lazyloadv1alpha1.Destination
 	var h, ns, fullHost string
 	var appFound, nsFound bool
 
-	for metricName, val := range sf.Status.MetricStatus {
-		log.Errorf("addDomainsWithMetricStatus metricName-xxx:%+v", metricName)
-		log.Errorf("addDomainsWithMetricStatus val-xxx:,%+v", val)
+	for metricName, _ := range sf.Status.MetricStatus {
+		// log.Errorf("addDomainsWithMetricStatus metricName-xxx:%+v", metricName)
+		// log.Errorf("addDomainsWithMetricStatus val-xxx:,%+v", val)
 		metricName = strings.Trim(metricName, "{}")
 		if strings.Contains(metricName, "destination_service_name=\"PassthroughCluster\"") {
 			fullHost = praseMetric(metricName, "destination_service", sf.Namespace)
@@ -777,7 +779,7 @@ func addDomainsWithMetricStatus(domains map[string]*lazyloadv1alpha1.Destination
 			allHost = append(allHost, hs...)
 		}
 
-		log.Errorf("addDomainsWithMetricStatus allHost-xxx:%+v", allHost)
+		// log.Errorf("addDomainsWithMetricStatus allHost-xxx:%+v", allHost)
 
 		domains[fullHost] = &lazyloadv1alpha1.Destinations{
 			Hosts:  allHost,

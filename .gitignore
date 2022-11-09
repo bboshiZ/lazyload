@@ -6,7 +6,7 @@
 *.so
 *.dylib
 bin
-
+a.sh
 # Test binary, build with `go test -c`
 *.test
 
@@ -19,6 +19,7 @@ bin
 
 # editor and IDE paraphernalia
 .idea
+.vscode
 *.swp
 *.swo
 *~

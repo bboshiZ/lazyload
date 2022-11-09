@@ -43,7 +43,7 @@ func (ps *PrometheusSource) QueryMetric(queryMap QueryMap) (Metric, error) {
 		}
 
 		for _, handler := range handlers {
-			log.Errorf("QueryMetric--QueryMetric-xxxx:%+v,%+v", meta, handler)
+			log.Errorf("prometheus--query:%+v,%+v,%+v", meta, handler.Name, handler.Query)
 			// log.Errorf("QueryMetric--QueryMetric-xxxx:%+v", handler.Query)
 
 			queryValue, w, e := ps.api.Query(context.Background(), handler.Query, time.Now())

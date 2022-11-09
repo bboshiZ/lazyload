@@ -278,7 +278,7 @@ func ParseRemoteSecretBytes(secretBytes []byte) (*RemoteSecret, error) {
 func getRemoteK8s(clientSet *kubernetes.Clientset) ([]*kubernetes.Clientset, error) {
 	var clientSets []*kubernetes.Clientset
 
-	secrets, err := clientSet.CoreV1().Secrets("").List(metav1.ListOptions{LabelSelector: "istio/remoteKiali=true"})
+	secrets, err := clientSet.CoreV1().Secrets("").List(metav1.ListOptions{LabelSelector: "istio-lazyload=true"})
 	if err != nil {
 		return nil, errors.New("failed to get remote k8s Secrets")
 
@@ -317,9 +317,14 @@ func getRemoteK8s(clientSet *kubernetes.Clientset) ([]*kubernetes.Clientset, err
 			continue
 
 		}
+
+		log.Infof("add remote clientSet: %s,%+v", secret.Name, clientSet)
+
 		clientSets = append(clientSets, clientSet)
 
 	}
+
+	// log.Infof("add remote clientSets: %v", clientSets)
 
 	return clientSets, nil
 }

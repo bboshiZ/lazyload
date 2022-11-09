@@ -136,6 +136,7 @@ func newSvcCacheMultiK8s(clientSets []*kubernetes.Clientset, sc *ServiceControll
 		clientSet := clientSets[i]
 		services, err := clientSet.CoreV1().Services("").List(metav1.ListOptions{})
 		if err != nil {
+			log.Errorf("Service List error: %+v", err)
 			return nil, nil, stderrors.New("failed to get service list")
 		}
 
