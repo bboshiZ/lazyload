@@ -671,8 +671,8 @@ func praseMetric(metricName string, svc, ns string) (fullHost string) {
 				fullHost = h
 
 			}
+			return
 		}
-		return
 
 	}
 
